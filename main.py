@@ -14,6 +14,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 Base = declarative_base()
 app = FastAPI()
@@ -78,11 +79,11 @@ class Blog(BaseModel):
 async def register(userRegistration: UserDetails):
     if len(userRegistration.username) == 0 or len(userRegistration.password) == 0:
         return {"message": "username or password was empty"}
-    session = Session(engine)
-    stmt = select(User.username)
-    find = session.scalars(stmt)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    find = session.query(User).all()
     for row in find:
-        if str(row) == str(userRegistration.username):
+        if str(row.username) == str(userRegistration.username):
             return {"message": "Please try with some other username this already exists"}
         else:
             print(row)
@@ -100,13 +101,12 @@ async def register(userRegistration: UserDetails):
 async def login(userLogin: UserDetails):
     if len(userLogin.username) == 0 or len(userLogin.password) == 0:
         return {"message": "username or password was empty"}
-    session = Session(engine)
-    stmt = select(User).where(User.username == str(userLogin.username))
-    find = session.execute(stmt).fetchone()
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    find = session.query(User).filter_by(username=userLogin.username).first()
     if (find == None):
         return {"message": "No such user exists, Wrong email Id or password"}
-    if str(getattr(find[0], 'username')) == userLogin.username and str(
-            getattr(find[0], 'password')) == userLogin.password:
+    if str(find.username) == userLogin.username and str(find.password) == userLogin.password:
         sessionId = str(uuid.uuid4());
         sessions = Sessions(session_id=sessionId, submisson_date=datetime.datetime.now().timestamp(),
                             username=userLogin.username)
@@ -117,7 +117,7 @@ async def login(userLogin: UserDetails):
 
 
 def checkForTheSessionExpiration(time):
-    if math.ceil(datetime.datetime.now().timestamp() - time) > 3000000000000000000000000:
+    if math.ceil(datetime.datetime.now().timestamp() - time) > 3000000000000000000000:
         return 1
     else:
         return 0
@@ -127,16 +127,16 @@ def checkForTheSessionExpiration(time):
 async def createBlog(blogData: BlogContent, token: Union[str, None] = Header(default=None)):
     if blogData.blog_data is None or len(blogData.blog_data) == 0 or len(blogData.blog_title) == 0:
         return {"message": "No content or title was found for the blog you created please add content"}
-    session = Session(engine)
-    stmt = select(Sessions).where(Sessions.session_id == str(token))
-    find = session.execute(stmt).fetchone()
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    find = session.query(Sessions).filter_by(session_id=token).first()
     if (find == None):
         return {"message": "Wrong session Id"}
-    flag = checkForTheSessionExpiration(float(getattr(find[0], 'submisson_date')))
+    flag = checkForTheSessionExpiration(float(find.submisson_date))
     if flag == 1:
         return {"message": "sessionExpired"}
     blog = Bloog(blog_title=blogData.blog_title, blog_data=blogData.blog_data,
-                 username=str(getattr(find[0], 'username')))
+                 username=str(find.username))
     session.add_all([blog])
     session.commit()
     return {"message": "Blog creation Successful"}
@@ -144,28 +144,27 @@ async def createBlog(blogData: BlogContent, token: Union[str, None] = Header(def
 
 @app.get("/list/blog")
 async def readBlog():
-    session = Session(engine)
-    stmt = select(Bloog)
-    find = session.execute(stmt)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    find = session.query(Bloog).all()
     if (find == None):
         return {"message": "No blogs are posted yet"}
     blogList = []
     for row in find:
-        b = BlogDetails(str(getattr(row[0], 'blog_id')), str(getattr(row[0], 'blog_title')),
-                        str(getattr(row[0], 'blog_data')), str(getattr(row[0], 'username')))
+        b = BlogDetails(str(row.blog_id), str(row.blog_title),
+                        str(row.blog_data), str(row.username))
         blogList.append(b)
     return blogList
 
 
 @app.get("/read/blog/")
 async def readSpecificBlog(q: Union[str, None] = None):
-    session = Session(engine)
-    print(len(q))
+    Session = sessionmaker(bind=engine)
+    session = Session()
     if (q is None or len(q) == 0):
         return {"message": "query params missing"}
-    stmt = select(Bloog).where(Bloog.blog_id == int(q))
-    find = session.execute(stmt).fetchone()
-    if (find is None or len(find) == 0):
+    find = session.query(Bloog).filter_by(blog_id=q).first()
+    if (find is None):
         return {"message": "No such id exists"}
     return find
 
@@ -174,26 +173,23 @@ async def readSpecificBlog(q: Union[str, None] = None):
 async def updateBlog(blog: Blog, token: Union[str, None] = Header(default=None)):
     if token is None or len(token) == 0:
         return {"message": "Invalid Token"}
-    session = Session(engine)
-    stmt = select(Sessions).where(Sessions.session_id == token)
-    find = session.execute(stmt).fetchone()
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    find = session.query(Sessions).filter_by(session_id = token).first()
     if find is None:
         return {"message": "No such session id found"}
-    flag = checkForTheSessionExpiration(float(getattr(find[0], 'submisson_date')))
+    flag = checkForTheSessionExpiration(float(find.submisson_date))
     if flag == 1:
         return {"message": "sessionExpired"}
     if blog.blog_id is None or blog.blog_title is None or blog.blog_data is None or len(blog.blog_id) == 0 or len(
             blog.blog_title) == 0 or len(blog.blog_data) == 0:
         return {"message": "Missing blog details"}
-    stmt = select(Bloog).where(Bloog.blog_id == (int(blog.blog_id)))
-    findB = session.execute(stmt).fetchone()
+    findB = session.query(Bloog).filter_by(blog_id=blog.blog_id).first()
     if (findB == None):
         return {"message": "No such Blog Exists"}
-    if (str(getattr(findB[0], 'username')) != str(getattr(find[0], 'username'))):
+    if str(find.username) != str(findB.username):
         return {"message": "You are unauthorized to update the blog"}
-    stmt = update(Bloog).where(Bloog.blog_id == int(blog.blog_id)).values(blog_data=blog.blog_data,
-                                                                          blog_title=blog.blog_title)
-    session.execute(stmt)
+    session.query(Bloog).filter(Bloog.blog_id == blog.blog_id).update({Bloog.blog_data:blog.blog_data,Bloog.blog_title:blog.blog_title},synchronize_session = False)
     session.commit()
     return {"message": "Blog updation successfully"}
 
@@ -204,23 +200,21 @@ async def updateBlog(blog: Blog, token: Union[str, None] = Header(default=None))
 async def deleteBlog(q: Union[str, None] = None, token: Union[str, None] = Header(default=None)):
     if token is None or len(token) == 0:
         return {"message": "Invalid Token"}
-    session = Session(engine)
-    stmt = select(Sessions).where(Sessions.session_id == token)
-    find = session.execute(stmt).fetchone()
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    find = session.query(Sessions).filter_by(session_id = token).first()
     if find is None:
         return {"message": "No such session id found"}
     if q is None or len(q) == 0:
         return {"message": "missing query params"}
-    flag = checkForTheSessionExpiration(float(getattr(find[0], 'submisson_date')))
+    flag = checkForTheSessionExpiration(float(find.submisson_date))
     if flag == 1:
         return {"message": "Session Expired"}
-    stmt = select(Bloog).where(Bloog.blog_id == int(q))
-    findB = session.execute(stmt).fetchone()
-    if (findB == None):
+    findB = session.query(Bloog).filter_by(blog_id=int(q)).first()
+    if findB == None:
         return {"message": "No such Blog Exists"}
-    if (str(getattr(findB[0], 'username')) != str(getattr(find[0], 'username'))):
+    if (str(findB.username) != str(find.username)):
         return {"message": "You are unauthorized to delete the blog"}
-    stmt = delete(Bloog).where(Bloog.blog_id == int(q))
-    session.execute(stmt)
+    session.query(Bloog).filter(Bloog.blog_id == q).delete(synchronize_session=False)
     session.commit()
     return {"message": "Delete Successful"}
